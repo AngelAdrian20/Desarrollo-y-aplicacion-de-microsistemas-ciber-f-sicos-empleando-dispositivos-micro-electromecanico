@@ -1,0 +1,83 @@
+/*
+   CALIBRACIÓN ASISTIDA (Motor Automático)
+   Instrucciones:
+   1. Sube el código.
+   2. Abre Monitor Serial.
+   3. Pon la marca de inicio en el eje.
+   4. Escribe 'g' y ENTER -> El motor gira despacio.
+   5. Cuenta 10 vueltas visualmente.
+   6. Escribe 's' y ENTER -> El motor para y te da el DATO CLAVE.
+*/
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+
+const int pinENA = 14; 
+const int pinIN1 = 26; 
+const int pinIN2 = 27; 
+const int pinEncA = 32; 
+const int pinEncB = 33; 
+const int pinPot = 34; 
+
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+volatile long encoderPos = 0; 
+
+void IRAM_ATTR leerEncoder() {
+  int b = digitalRead(pinEncB);
+  if (b > 0) encoderPos++;
+  else encoderPos--;
+}
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin(25, 13);
+  lcd.init(); lcd.backlight();
+  
+  pinMode(pinIN1, OUTPUT); pinMode(pinIN2, OUTPUT);
+  pinMode(pinEncA, INPUT_PULLUP); pinMode(pinEncB, INPUT_PULLUP);
+  pinMode(pinPot, INPUT);
+  
+  // Configuración PWM
+  ledcAttach(pinENA, 5000, 8);
+  attachInterrupt(digitalPinToInterrupt(pinEncA), leerEncoder, RISING);
+  
+  Serial.println("--- LISTO PARA CALIBRAR ---");
+  Serial.println("Escribe 'g' para GIRAR");
+  Serial.println("Escribe 's' para PARAR");
+  Serial.println("Escribe 'r' para RESETEAR contador a 0");
+}
+
+void loop() {
+  if (Serial.available()) {
+    char c = Serial.read();
+    
+    // COMANDO GIRAR
+    if (c == 'g' || c == 'G') {
+      digitalWrite(pinIN1, HIGH); digitalWrite(pinIN2, LOW);
+      ledcWrite(pinENA, 100); // Velocidad lenta (ajusta si va muy rápido)
+      Serial.println("Girando... ¡Cuenta las vueltas!");
+    }
+    
+    // COMANDO PARAR
+    if (c == 's' || c == 'S') {
+      digitalWrite(pinIN1, LOW); digitalWrite(pinIN2, LOW);
+      ledcWrite(pinENA, 0);
+      Serial.print("--- DETENIDO --- Total Pasos: ");
+      Serial.println(encoderPos);
+    }
+
+    // COMANDO RESET
+    if (c == 'r' || c == 'R') {
+      encoderPos = 0;
+      Serial.println("Contador en CERO");
+    }
+  }
+
+  // Mostrar datos del Potenciómetro para que también lo anotes
+  // (Mueve el pot manualmente mientras el motor está quieto)
+  static long tiempo = 0;
+  if (millis() - tiempo > 500) {
+    tiempo = millis();
+    lcd.setCursor(0,0); lcd.print("Pasos: "); lcd.print(encoderPos); lcd.print("   ");
+    lcd.setCursor(0,1); lcd.print("Pot: "); lcd.print(analogRead(pinPot)); lcd.print("   ");
+  }
+}
