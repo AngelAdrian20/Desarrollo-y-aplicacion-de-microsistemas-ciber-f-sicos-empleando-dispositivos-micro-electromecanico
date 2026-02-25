@@ -1,0 +1,108 @@
+% --- CONTROL PID HIL
+clear; clc; 
+
+% 1. LIMPIEZA DE CONEXIONES
+if ~isempty(serialportlist("available"))
+    puertos_viejos = serialportlist("available");
+    if exist('puerto', 'var'), clear puerto; end
+end
+
+% 2. CONFIGURACIÓN DEL PUERTO (Asegúrate de que sea el COM7)
+puerto = serialport("COM7", 115200); 
+configureTerminator(puerto, "LF"); 
+flush(puerto); 
+
+% 3. PARÁMETROS DEL SISTEMA
+PULSOS_POR_VUELTA = 1220;
+VUELTAS_MAX = 10;
+MAX_OBJETIVO_PULSOS = VUELTAS_MAX * PULSOS_POR_VUELTA;
+
+% 4. GANANCIAS PID SINTONIZADAS (Valores para estabilidad)
+kp = 0.2; 
+ki = 0.01; 
+kd = 0.01; 
+
+% Variables de memoria y control
+integral = 0;
+error_anterior = 0;
+t = 0; 
+
+% 5. PREPARACIÓN DE LA GRÁFICA (ESTILO ARTÍCULO CIENTÍFICO)
+fig = figure('Name','Análisis de Control Posicional Angular','Color','w');
+ax = axes('Parent', fig);
+
+% Configuración estética de los ejes
+set(ax, 'Color', 'w', 'XColor', 'k', 'YColor', 'k', 'FontSize', 10);
+grid(ax, 'on');
+set(ax, 'GridColor', [0.8 0.8 0.8], 'GridAlpha', 0.5);
+
+% Líneas animadas con nombres profesionales para la leyenda
+hLineRef = animatedline('Color','r','LineWidth',2,'DisplayName','Referencia (Setpoint ^o)');
+hLineReal = animatedline('Color','b','LineWidth',1.5,'DisplayName','Posición Real (Feedback ^o)');
+
+% Etiquetas y límites en GRADOS
+legend('Location','northwest'); 
+ylabel('Desplazamiento Angular (Grados º)'); 
+xlabel('Muestras (Tiempo)');
+ylim([-50 (VUELTAS_MAX * 360 + 100)]); 
+
+disp('--- Sistema de Control HIL Iniciado ---');
+disp('Monitoreando respuesta en grados...');
+
+% --- BUCLE PRINCIPAL ---
+while true
+    try
+        % A. LEER DATOS DEL ESP32
+        linea = readline(puerto); 
+        datos = str2double(split(linea, ',')); 
+        
+        if length(datos) == 2 
+            lecturaPot = datos(1); 
+            posEncoder = datos(2); 
+            
+            % Mapeo del Setpoint en PULSOS para el cálculo interno
+            setpoint = (lecturaPot * MAX_OBJETIVO_PULSOS) / 4095;
+            
+            % --- B. ALGORITMO PID (Cálculo en pulsos para precisión) ---
+            error = setpoint - posEncoder;
+            
+            P = kp * error;
+            if abs(error) > 20 
+                integral = integral + error;
+            end
+            if integral > 1500, integral = 1500; end
+            if integral < -1500, integral = -1500; end
+            I = ki * integral;
+            
+            D = kd * (error - error_anterior);
+            salida = P + I + D;
+            error_anterior = error;
+            
+            % --- C. COMANDO PWM ---
+            pwm_out = round(salida);
+            if pwm_out > 255, pwm_out = 255; end
+            if pwm_out < -255, pwm_out = -255; end
+            
+            writeline(puerto, num2str(pwm_out));
+            
+            % --- D. CONVERSIÓN A GRADOS PARA VISUALIZACIÓN ---
+            % Transformamos los datos crudos a unidades de ingeniería
+            gradosRef = (setpoint / PULSOS_POR_VUELTA) * 360;
+            gradosReal = (posEncoder / PULSOS_POR_VUELTA) * 360;
+            
+            % Actualizar gráfica
+            addpoints(hLineRef, t, gradosRef);
+            addpoints(hLineReal, t, gradosReal);
+            
+            t = t + 1; 
+            drawnow limitrate; 
+        end
+    catch ME
+        writeline(puerto, "0");
+        fprintf('Sistema detenido: %s\n', ME.message);
+        break;
+    end
+end
+
+clear puerto;
+disp('Puerto liberado correctamente.');
