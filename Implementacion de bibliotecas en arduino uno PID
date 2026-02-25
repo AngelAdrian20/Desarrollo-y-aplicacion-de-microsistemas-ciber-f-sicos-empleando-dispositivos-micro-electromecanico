@@ -1,0 +1,138 @@
+/*
+   CONTROL PID FINAL - CON INTEGRAL (KI) PARA PRECISIÓN
+   Hardware: ESP32 + Motor con Encoder + Driver L298N + Potenciómetro
+*/
+
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+
+// --- CONSTANTES VALIDADAS CON TUS DATOS ---
+const int PULSOS_POR_VUELTA = 1220; // ¡Confirmado por tus pruebas!
+const int VUELTAS_POTENCIOMETRO = 10; 
+const int MAX_OBJETIVO = VUELTAS_POTENCIOMETRO * PULSOS_POR_VUELTA;
+
+// --- DEFINICIÓN DE PINES ---
+const int pinENA = 14; 
+const int pinIN1 = 26; 
+const int pinIN2 = 27; 
+const int pinEncA = 32; 
+const int pinEncB = 33; 
+const int pinPot = 34; 
+
+// PINES DE PANTALLA LCD (Faltaban estos)
+const int pinSDA = 25; 
+const int pinSCL = 13; 
+
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+volatile long encoderPos = 0; 
+double setpoint = 0;      
+double input = 0;    
+double output = 0;   
+
+// --- AJUSTES PID REFINADOS ---
+double Kp = 1.4;     
+double Ki = 0.08;    
+double Kd = 0.0;     
+
+// Zona muerta 
+int zonaMuerta = 15; 
+
+double error, lastError = 0;
+double integral = 0;
+
+const int frecuencia = 5000; 
+const int resolucion = 8;    
+unsigned long tiempoLCD = 0;
+
+void IRAM_ATTR leerEncoder() {
+  int b = digitalRead(pinEncB);
+  if (b > 0) encoderPos++;
+  else encoderPos--;
+}
+
+void setup() {
+  Serial.begin(115200); 
+  
+  // Ahora sí va a funcionar porque pinSDA y pinSCL ya existen
+  Wire.begin(pinSDA, pinSCL); 
+  
+  lcd.init(); lcd.backlight();
+  
+  pinMode(pinIN1, OUTPUT); pinMode(pinIN2, OUTPUT);
+  pinMode(pinEncA, INPUT_PULLUP); pinMode(pinEncB, INPUT_PULLUP);
+  pinMode(pinPot, INPUT);
+  
+  ledcAttach(pinENA, frecuencia, resolucion);
+  attachInterrupt(digitalPinToInterrupt(pinEncA), leerEncoder, RISING);
+}
+
+void loop() {
+  // Reinicio manual si escribes 'r'
+  if (Serial.available()) {
+    char c = Serial.read();
+    if (c == 'r' || c == 'R') {
+      encoderPos = 0;
+      integral = 0;
+      Serial.println("CERO REINICIADO");
+    }
+  }
+
+  // --- FILTRO POTENCIÓMETRO ---
+  int lecturaRaw = analogRead(pinPot);
+  static float lecturaFiltrada = 0;
+  lecturaFiltrada = (0.92 * lecturaFiltrada) + (0.08 * lecturaRaw); 
+
+  setpoint = map((int)lecturaFiltrada, 0, 4095, 0, MAX_OBJETIVO); 
+
+  // --- PID ---
+  input = encoderPos; 
+  error = setpoint - input;
+
+  // Lógica Integral (Ki) Inteligente
+  if (abs(error) < zonaMuerta) {
+    output = 0;
+    integral = 0; 
+  } else {
+    // Solo acumulamos fuerza (integral) si el error no es gigante
+    if (abs(error) < 500) { 
+        integral += error;
+    }
+    
+    // Anti-windup
+    if(integral > 1500) integral = 1500;
+    if(integral < -1500) integral = -1500;
+
+    output = (Kp * error) + (Ki * integral); 
+  }
+
+  moverMotor(output);
+
+  // --- MONITOR ---
+  if (millis() - tiempoLCD > 200) { 
+    tiempoLCD = millis();
+    Serial.print("Meta:"); Serial.print(setpoint);
+    Serial.print(",");
+    Serial.print("Actual:"); Serial.println(input);
+  }
+}
+
+void moverMotor(int fuerza) {
+  int pwm = abs(fuerza);
+  if (pwm > 255) pwm = 255;
+  
+  if (fuerza == 0) {
+     digitalWrite(pinIN1, LOW); digitalWrite(pinIN2, LOW);
+     ledcWrite(pinENA, 0);
+     return;
+  }
+
+  if (pwm < 90) pwm = 90; 
+
+  if (fuerza > 0) {
+    digitalWrite(pinIN1, HIGH); digitalWrite(pinIN2, LOW);
+  } else {
+    digitalWrite(pinIN1, LOW); digitalWrite(pinIN2, HIGH);
+  }
+  ledcWrite(pinENA, pwm);
+}
