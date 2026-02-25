@@ -1,0 +1,68 @@
+/*
+   CÓDIGO ESCLAVO - INTERFAZ DE HARDWARE
+   Este código solo lee sensores y obedece a MATLAB.
+*/
+
+// --- PINES ---
+const int pinENA = 14; 
+const int pinIN1 = 26; 
+const int pinIN2 = 27; 
+const int pinEncA = 32; 
+const int pinEncB = 33; 
+const int pinPot = 34; 
+
+volatile long encoderPos = 0; 
+
+// Interrupción del Encoder (Se queda aquí por velocidad de respuesta)
+void IRAM_ATTR leerEncoder() {
+  int b = digitalRead(pinEncB);
+  if (b > 0) encoderPos++;
+  else encoderPos--;
+}
+
+void setup() {
+  Serial.begin(115200); 
+  
+  pinMode(pinIN1, OUTPUT); pinMode(pinIN2, OUTPUT);
+  pinMode(pinEncA, INPUT_PULLUP); pinMode(pinEncB, INPUT_PULLUP);
+  pinMode(pinPot, INPUT);
+  
+  // Configuración PWM para ESP32
+  ledcAttach(pinENA, 5000, 8); 
+  attachInterrupt(digitalPinToInterrupt(pinEncA), leerEncoder, RISING);
+}
+
+void loop() {
+  // 1. ENVIAR DATOS A MATLAB
+  // Formato: Pot,Encoder
+  Serial.print(analogRead(pinPot));
+  Serial.print(",");
+  Serial.println(encoderPos);
+
+  // 2. RECIBIR ORDEN DE MATLAB
+  if (Serial.available() > 0) {
+    String data = Serial.readStringUntil('\n');
+    int pwmMotor = data.toInt();
+    moverMotor(pwmMotor);
+  }
+  
+  // Pequeña pausa de estabilidad
+  delay(10); 
+}
+
+void moverMotor(int fuerza) {
+  int pwm = abs(fuerza);
+  if (pwm > 255) pwm = 255;
+  
+  // Zona muerta mínima para el motor
+  if (pwm < 40 && pwm > 0) pwm = 0;
+
+  if (fuerza > 0) {
+    digitalWrite(pinIN1, HIGH); digitalWrite(pinIN2, LOW);
+  } else if (fuerza < 0) {
+    digitalWrite(pinIN1, LOW); digitalWrite(pinIN2, HIGH);
+  } else {
+    digitalWrite(pinIN1, LOW); digitalWrite(pinIN2, LOW);
+  }
+  ledcWrite(pinENA, pwm);
+}
